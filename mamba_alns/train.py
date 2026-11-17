@@ -3,7 +3,7 @@
 Each episode: a fresh random CVRP instance, run `iterations` ALNS steps.
   - action    = (destroy, repair) pair, picked epsilon-greedily from Q
   - acceptance: always accept the new solution (best_so_far tracked separately)
-  - reward    = e^(best_so_far - current_cost)
+  - reward    = e^((best_so_far - current_cost) / best_so_far)
 Target for transition (s_t, a_t):
   G = sum_{i<N} gamma^i r_{t+i}  +  gamma^N * max_a Q_target(s_{t+N}, a)
   (bootstrap term dropped when s_{t+N} is the last state of the episode)

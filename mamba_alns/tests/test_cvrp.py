@@ -62,5 +62,7 @@ def test_tight_capacity_respected():
 
 def test_reward():
     assert reward(5.0, 5.0) == pytest.approx(1.0)
-    assert reward(6.0, 5.0) == pytest.approx(math.exp(-1.0))
+    assert reward(6.0, 5.0) == pytest.approx(math.exp(-1.0 / 5.0))
     assert 0.0 < reward(100.0, 5.0) <= 1.0
+    # scale invariant: same relative gap, same reward
+    assert reward(6000.0, 5000.0) == pytest.approx(reward(6.0, 5.0))

@@ -204,6 +204,7 @@ def apply_action(action, routes, inst, k, rng):
 # ---------------------------------------------------------------- reward
 
 def reward(current_cost, best_cost):
-    """e^(best - current). best_cost must already include the current
-    solution, so the reward is in (0, 1] and equals 1 at a new best."""
-    return float(np.exp(best_cost - current_cost))
+    """e^((best - current) / best). best_cost must already include the current
+    solution, so the reward is in (0, 1] and equals 1 at a new best. Dividing
+    by best makes the reward independent of the instance's cost scale."""
+    return float(np.exp((best_cost - current_cost) / best_cost))

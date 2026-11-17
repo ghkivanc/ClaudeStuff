@@ -9,7 +9,7 @@ A GAT + Mamba Q-network that learns, with N-step Q-learning, which
 | Action | one of 9 (destroy, repair) pairs. Destroy: random / worst / related. Repair: greedy / regret-2 / random |
 | Acceptance | always accept the new solution; best_so_far tracked separately |
 | Exploration | epsilon-greedy, linear decay |
-| Reward | `r = e^(best_so_far - current)`, with best updated first, so r ∈ (0, 1] |
+| Reward | `r = e^((best_so_far - current) / best_so_far)`, with best updated first, so r ∈ (0, 1] |
 | Solution encoder | GAT over route arcs + self-loops, distance as edge feature, mean pooling |
 | Sequence model | pure-PyTorch Mamba over the last K tokens |
 | Token at step j | `[GAT(s_j), one_hot(a_{j-1}), r_{j-1}]` |
