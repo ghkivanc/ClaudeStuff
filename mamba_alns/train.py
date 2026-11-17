@@ -3,7 +3,7 @@
 Each episode: a fresh random CVRP instance, run `iterations` ALNS steps.
   - action    = (destroy, repair) pair, picked epsilon-greedily from Q
   - acceptance: always accept the new solution (best_so_far tracked separately)
-  - reward    = e^((best_so_far - current_cost) / best_so_far)
+  - reward    = 1 / ((current_cost - ref) / ref + eps), ref = LP lower bound
 Target for transition (s_t, a_t):
   G = sum_{i<N} gamma^i r_{t+i}  +  gamma^N * max_a Q_target(s_{t+N}, a)
   (bootstrap term dropped when s_{t+N} is the last state of the episode)
@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 
 from .cvrp import ACTIONS, apply_action, initial_solution, random_instance, reward, solution_cost
+from .lp_bound import lp_reference
 from .qnet import MambaQNet
 from .replay import Episode, ReplayBuffer, n_step_return, stack_windows
 
@@ -30,6 +31,7 @@ class Config:
     capacity: int = 40
     destroy_fraction: float = 0.2     # share of customers removed per destroy
     iterations: int = 100             # ALNS iterations per episode (T)
+    reward_eps: float = 1e-3
     # Q-learning
     episodes: int = 300
     window: int = 8                   # K: tokens Mamba sees
@@ -67,6 +69,7 @@ def run_episode(qnet, inst, cfg, eps, rng):
     routes = initial_solution(inst)
     best = solution_cost(routes, inst)
     episode = Episode(inst, routes)
+    ref = lp_reference(inst)
     k = max(1, int(cfg.destroy_fraction * inst.n_customers))
 
     for t in range(cfg.iterations):
@@ -74,7 +77,7 @@ def run_episode(qnet, inst, cfg, eps, rng):
         routes = apply_action(action, routes, inst, k, rng)   # always accept
         cost = solution_cost(routes, inst)
         best = min(best, cost)
-        episode.add_step(action, reward(cost, best), routes)
+        episode.add_step(action, reward(cost, ref, cfg.reward_eps), routes)
     return episode, best
 
 

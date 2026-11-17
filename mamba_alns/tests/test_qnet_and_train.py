@@ -41,7 +41,7 @@ def test_run_episode():
     ep, best = run_episode(small_qnet(), inst, cfg, 0.5, rng)
     assert len(ep) == cfg.iterations
     assert best <= start + 1e-9
-    assert all(0 < r <= 1 for r in ep.rewards)
+    assert all(r > 0 for r in ep.rewards)
     assert all(0 <= a < len(ACTIONS) for a in ep.actions)
 
 

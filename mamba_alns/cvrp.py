@@ -203,8 +203,7 @@ def apply_action(action, routes, inst, k, rng):
 
 # ---------------------------------------------------------------- reward
 
-def reward(current_cost, best_cost):
-    """e^((best - current) / best). best_cost must already include the current
-    solution, so the reward is in (0, 1] and equals 1 at a new best. Dividing
-    by best makes the reward independent of the instance's cost scale."""
-    return float(np.exp((best_cost - current_cost) / best_cost))
+def reward(current_cost, ref_cost, eps):
+    """1 / ((current - ref) / ref + eps), where ref is the instance's LP lower
+    bound. The gap is relative, so the reward does not depend on cost scale."""
+    return 1.0 / ((current_cost - ref_cost) / ref_cost + eps)
