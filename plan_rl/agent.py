@@ -42,7 +42,8 @@ class PlanningAgent:
             self._replan(info.legal)
             probs = self._plan_policy(info.legal)
         self.targets[len(self.events)] = probs
-        action = int(self.rng.choice(3, p=probs.double().numpy()))
+        p = probs.double().numpy()
+        action = int(self.rng.choice(3, p=p / p.sum()))   # renormalise in float64 for numpy
 
         self.events.append(to_event(MY, action))
         self.node = self.node.children[action][0]
