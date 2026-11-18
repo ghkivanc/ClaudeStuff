@@ -1,22 +1,21 @@
 """Self-play training of the planning agent on Leduc.
 
-Each hand: the learner plays a snapshot sampled from the population (the
-snapshot's slot is the opponent's "type"). Both sides plan. After the hand,
-both cards are known, so the learner's view of the hand becomes a Record with
-targets for every head of the world model:
+Each hand: the current model plays itself (AlphaZero-style). Each seat is a
+separate PlanningAgent with its own tree and belief; seats alternate. After
+the hand both cards are known, so each seat's view of the hand becomes a
+Record with targets for every head of the world model:
 
   node kind, legal actions  : from the rules
-  my policy                 : softmax of my tree's action values (policy_target)
+  my policy                 : my plan's policy at each decision, softmax(q / T)
   opponent policy           : the action the opponent actually took
   public card               : the card actually dealt
   reward / value            : chips I won (all reward arrives at the end)
 
 The model is trained MuZero-style: represent a random prefix of the hand with
-the TRUE hypothesis, then unroll the dynamics over the rest of the hand.
+the TRUE opponent card, then unroll the dynamics over the rest of the hand.
 
 Run:  python -m plan_rl.train
 """
-import copy
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -36,9 +35,8 @@ class Config:
     n_plans: int = 32                 # plans sampled per decision
     max_depth: int = 10               # events per plan (a Leduc hand has at most 9)
     surprise_threshold: float = 0.05
-    policy_temperature: float = 1.0   # softmax temperature of the policy target (chips)
+    policy_temperature: float = 1.0   # softmax temperature (chips) for acting and the target
     # model
-    n_types: int = 8                  # population size = number of opponent types
     d_model: int = 64
     mamba_layers: int = 2
     # self-play and learning
@@ -46,19 +44,13 @@ class Config:
     train_every: int = 20             # hands between training phases
     updates_per_phase: int = 10
     batch_size: int = 64
-    buffer_hands: int = 5000
-    snapshot_every: int = 250         # hands between new snapshots
+    buffer_records: int = 10000       # two records per hand, one per seat
     lr: float = 3e-4
     log_every: int = 200
     # evaluation
     eval_hands: int = 1000
     cfr_iterations: int = 1000
     seed: int = 0
-
-
-def known_types(cfg):
-    """Population slots filled by the end of training."""
-    return min(cfg.n_types, 1 + cfg.hands // cfg.snapshot_every)
 
 
 # ---------------------------------------------------------------- records
@@ -68,7 +60,6 @@ class Record:
     seat: int
     my_card: int
     opp_card: int
-    opp_type: int
     events: list    # event ids from my point of view
     kinds: list     # node kind before each event, plus TERMINAL at the end
     legal: list     # legal-action mask before each event ([False]*3 at the chance node)
@@ -76,7 +67,7 @@ class Record:
     payoff: float   # chips I won
 
 
-def make_record(final, seat, opp_type, targets):
+def make_record(final, seat, targets):
     events, kinds, legal = [], [], []
     for s, (what, x) in replay(final):
         if what == "chance":
@@ -89,7 +80,7 @@ def make_record(final, seat, opp_type, targets):
         legal.append(mask)
     kinds.append(TERMINAL)
     my_payoff = payoff(final) if seat == 0 else -payoff(final)
-    return Record(seat, final.cards[seat], final.cards[1 - seat], opp_type,
+    return Record(seat, final.cards[seat], final.cards[1 - seat],
                   events, kinds, legal, targets, float(my_payoff))
 
 
@@ -134,7 +125,7 @@ def _node_loss(pred, records, nodes):
 
 
 def model_loss(model, records, rng):
-    """Represent a random prefix of each hand (true hypothesis), unroll over the rest."""
+    """Represent a random prefix of each hand (true opponent card), unroll over the rest."""
     starts = [int(rng.integers(len(r.events) + 1)) for r in records]
     prefix = torch.full((len(records), max(starts)), PAD, dtype=torch.long)
     for i, (r, k) in enumerate(zip(records, starts)):
@@ -142,7 +133,6 @@ def model_loss(model, records, rng):
     latent = model.represent(torch.tensor([r.seat for r in records]),
                              torch.tensor([r.my_card for r in records]),
                              torch.tensor([r.opp_card for r in records]),
-                             torch.tensor([r.opp_type for r in records]),
                              prefix, torch.tensor(starts))
 
     unroll = max(len(r.events) - k for r, k in zip(records, starts))
@@ -162,29 +152,6 @@ def model_loss(model, records, rng):
     return loss
 
 
-# ---------------------------------------------------------------- population
-
-class Population:
-    """Frozen snapshots of the learner. The slot index is the opponent's type."""
-
-    def __init__(self, n_types):
-        self.n_types = n_types
-        self.slots = []        # (frozen model, number of types it knew about)
-        self.next_slot = 0     # slot replaced next once full (oldest first)
-
-    def add(self, model):
-        """Returns (slot, replaced)."""
-        frozen = copy.deepcopy(model).eval().requires_grad_(False)
-        snapshot = (frozen, max(1, len(self.slots)))
-        if len(self.slots) < self.n_types:
-            self.slots.append(snapshot)
-            return len(self.slots) - 1, False
-        slot = self.next_slot
-        self.slots[slot] = snapshot
-        self.next_slot = (slot + 1) % self.n_types
-        return slot, True
-
-
 # ---------------------------------------------------------------- training loop
 
 def train(cfg):
@@ -193,26 +160,19 @@ def train(cfg):
     py_rng = random.Random(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
 
-    model = WorldModel(cfg.n_types, cfg.d_model, cfg.mamba_layers)
+    model = WorldModel(cfg.d_model, cfg.mamba_layers)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-    population = Population(cfg.n_types)
-    population.add(model)
-    buffer = deque(maxlen=cfg.buffer_hands)
-    payoffs, replans, losses = [], [], []
+    buffer = deque(maxlen=cfg.buffer_records)
+    seat0_payoffs, replans, losses = [], [], []
 
     for hand in range(cfg.hands):
-        slot = int(rng.integers(len(population.slots)))
-        opp_model, opp_known = population.slots[slot]
-        learner = PlanningAgent(model, len(population.slots), cfg, rng)
-        opponent = PlanningAgent(opp_model, opp_known, cfg, rng)
-        seat = hand % 2
-        players = (learner, opponent) if seat == 0 else (opponent, learner)
+        # Same model in both seats; each player has its own tree and belief.
+        players = (PlanningAgent(model, cfg, rng), PlanningAgent(model, cfg, rng))
         final = play_hand(*players, py_rng)
-
-        record = make_record(final, seat, slot, learner.targets)
-        buffer.append(record)
-        payoffs.append(record.payoff)
-        replans.append(learner.n_replans)
+        for seat, player in enumerate(players):
+            buffer.append(make_record(final, seat, player.targets))
+            replans.append(player.n_replans)
+        seat0_payoffs.append(payoff(final))
 
         if (hand + 1) % cfg.train_every == 0:
             for _ in range(cfg.updates_per_phase):
@@ -224,19 +184,11 @@ def train(cfg):
                 optimizer.step()
                 losses.append(loss.item())
 
-        if (hand + 1) % cfg.snapshot_every == 0:
-            slot, replaced = population.add(model)
-            if replaced:   # this type is now a different opponent: forget the old one
-                buffer = deque((r for r in buffer if r.opp_type != slot), maxlen=cfg.buffer_hands)
-                with torch.no_grad():
-                    model.type_emb.weight[slot].normal_()
-
         if (hand + 1) % cfg.log_every == 0:
-            print(f"hand {hand + 1:6d}  payoff/hand {np.mean(payoffs):+.3f}  "
-                  f"replans/hand {np.mean(replans):.2f}  "
-                  f"loss {np.mean(losses) if losses else float('nan'):.3f}  "
-                  f"population {len(population.slots)}")
-            payoffs, replans, losses = [], [], []
+            print(f"hand {hand + 1:6d}  seat-0 payoff/hand {np.mean(seat0_payoffs):+.3f}  "
+                  f"replans/player/hand {np.mean(replans):.2f}  "
+                  f"loss {np.mean(losses) if losses else float('nan'):.3f}")
+            seat0_payoffs, replans, losses = [], [], []
     return model
 
 

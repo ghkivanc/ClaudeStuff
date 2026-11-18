@@ -19,7 +19,7 @@ from .agent import PlanningAgent
 from .cfr import CFR, expected_value, uniform_policy
 from .leduc import payoff, play_hand
 from .model import WorldModel
-from .train import Config, known_types
+from .train import Config
 
 
 class PolicyPlayer:
@@ -61,7 +61,7 @@ def evaluate_all(model, cfg):
                  - expected_value(uniform_policy, cfr_policy)) / 2
     print(f"reference  CFR vs random (exact): {reference:+.3f} chips/hand")
 
-    agent = PlanningAgent(model, known_types(cfg), cfg, rng)
+    agent = PlanningAgent(model, cfg, rng)
     for name, policy in [("random", uniform_policy), ("cfr", cfr_policy)]:
         mean, stderr = match(agent, PolicyPlayer(policy, rng), cfg.eval_hands, py_rng)
         print(f"agent vs {name:6s}: {mean:+.3f} ± {stderr:.3f} chips/hand  ({cfg.eval_hands} hands)")
@@ -69,6 +69,6 @@ def evaluate_all(model, cfg):
 
 if __name__ == "__main__":
     cfg = Config()
-    model = WorldModel(cfg.n_types, cfg.d_model, cfg.mamba_layers)
+    model = WorldModel(cfg.d_model, cfg.mamba_layers)
     model.load_state_dict(torch.load("world_model.pt"))
     evaluate_all(model, cfg)

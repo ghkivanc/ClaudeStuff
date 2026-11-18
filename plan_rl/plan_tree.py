@@ -6,11 +6,13 @@ and the public card from the chance head, each averaged over the belief.
 Plans that share a prefix share nodes, so sampling many plans grows a tree.
 
 Every node is a position in the public event sequence. It holds one latent
-per hypothesis and the belief given the events on the path to it.
+per hypothesis (possible opponent card) and the belief given the events on
+the path to it.
 
 Backup (values are per hypothesis, shape (H,)):
-  my node       : choose ONE action for all hypotheses (I cannot tell them
-                  apart) with the highest belief-weighted value
+  my node       : q(a) = belief-weighted value of action a; my policy there is
+                  softmax(q / temperature), the SAME for all hypotheses (I
+                  cannot tell them apart); value = expectation under that policy
   opponent node : expectation over the opponent's actions under each hypothesis
   chance node   : expectation over the public card under each hypothesis
   leaf          : value head;  terminal: 0 (rewards sit on the edges)
@@ -39,7 +41,7 @@ class Node:
         self.value_h = pred.value                    # (H,)
         self.children = {}   # outcome x -> (child Node, reward per hypothesis (H,))
         self.q = {}          # my nodes after backup: action -> belief-weighted value
-        self.choice = None   # my nodes after backup: the chosen action
+        self.policy = None   # my nodes after backup: (3,) softmax(q / temperature), 0 if not in tree
 
     def outcome_probs(self):
         """Opponent-action or public-card probabilities averaged over the belief (3,)."""
@@ -79,17 +81,20 @@ def sample_plan(root, model, max_depth, rng):
     return plan
 
 
-def backup(node):
-    """Value of node under each hypothesis (H,); sets q and choice at my nodes."""
+def backup(node, temperature):
+    """Value of node under each hypothesis (H,); sets q and policy at my nodes."""
     if node.kind == TERMINAL:
         return torch.zeros_like(node.value_h)
     if not node.children:
         return node.value_h
-    q_h = {x: reward + backup(child) for x, (child, reward) in node.children.items()}
+    q_h = {x: reward + backup(child, temperature) for x, (child, reward) in node.children.items()}
     if node.kind == MY:
-        node.q = {x: float(node.belief @ v) for x, v in q_h.items()}
-        node.choice = max(node.q, key=node.q.get)
-        return q_h[node.choice]
+        actions = list(q_h)
+        node.q = {x: float(node.belief @ q_h[x]) for x in actions}
+        probs = torch.softmax(torch.tensor([node.q[x] for x in actions]) / temperature, dim=0)
+        node.policy = torch.zeros(3)
+        node.policy[actions] = probs
+        return sum(p * q_h[x] for p, x in zip(probs, actions))
     outcomes = list(q_h)
     weights = node.outcome_probs_h[:, outcomes] + LIKELIHOOD_FLOOR       # (H, n)
     weights = weights / weights.sum(1, keepdim=True)                     # only sampled outcomes
@@ -98,7 +103,7 @@ def backup(node):
 
 
 @torch.no_grad()
-def build_tree(model, root_latents, belief, legal, n_plans, max_depth, rng):
+def build_tree(model, root_latents, belief, legal, n_plans, max_depth, temperature, rng):
     """Root = my decision with the real legal actions. Expand every legal action,
     sample n_plans plans, back up. Returns (root, plans)."""
     mask = torch.zeros(3, dtype=torch.bool)
@@ -107,14 +112,6 @@ def build_tree(model, root_latents, belief, legal, n_plans, max_depth, rng):
     for a in legal:
         root.child(a, model)
     plans = [sample_plan(root, model, max_depth, rng) for _ in range(n_plans)]
-    backup(root)
+    backup(root, temperature)
     return root, plans
 
-
-def policy_target(node, temperature):
-    """Softmax of a my-node's action values; 0 for actions not in the tree."""
-    target = torch.zeros(3)
-    actions = list(node.q)
-    values = torch.tensor([node.q[a] for a in actions])
-    target[actions] = torch.softmax(values / temperature, dim=0)
-    return target

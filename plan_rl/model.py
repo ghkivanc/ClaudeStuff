@@ -1,12 +1,13 @@
 """Learned world model (MuZero-style), always from one player's ("my") view.
 
-  represent : (deal, hypothesis, event history) -> latent      [Mamba]
+  represent : (deal, opponent card, event history) -> latent  [Mamba]
   dynamics  : (latent, event) -> next latent, reward for me    [MLP]
   predict   : latent -> node kind, my policy, opponent policy,
               public-card probabilities, legal actions, value  [MLP heads]
 
-A hypothesis is (opponent's card, opponent's type). The rules are only used
-to make training targets; planning runs entirely inside this model.
+The opponent's card is unknown, so planning keeps one latent per possible
+card (a hypothesis). The rules are only used to make training targets;
+planning runs entirely inside this model.
 
 Events, numbered from my point of view:
   0..2  my action (fold, call, raise)
@@ -19,7 +20,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .belief import hypothesis_cards, hypothesis_types
 from .leduc import N_ACTIONS, N_RANKS
 from .mamba import ResidualMamba
 
@@ -60,12 +60,10 @@ def _mlp(d_in, hidden, d_out):
 
 
 class WorldModel(nn.Module):
-    def __init__(self, n_types, d_model=64, mamba_layers=2, hidden=128):
+    def __init__(self, d_model=64, mamba_layers=2, hidden=128):
         super().__init__()
-        self.n_types = n_types
         # representation
         self.deal_proj = nn.Linear(2 * N_RANKS + 2, d_model)
-        self.type_emb = nn.Embedding(n_types, d_model)
         self.event_emb = nn.Embedding(N_EVENTS + 1, d_model)       # + PAD
         self.blocks = nn.ModuleList([ResidualMamba(d_model) for _ in range(mamba_layers)])
         self.norm = nn.LayerNorm(d_model)
@@ -83,13 +81,13 @@ class WorldModel(nn.Module):
         self.legal_head = nn.Linear(hidden, N_ACTIONS)
         self.value_head = nn.Linear(hidden, 1)
 
-    def represent(self, seat, my_card, opp_card, opp_type, events, lengths):
-        """seat, my_card, opp_card, opp_type, lengths: (B,) long.
+    def represent(self, seat, my_card, opp_card, events, lengths):
+        """seat, my_card, opp_card, lengths: (B,) long.
         events: (B, L) long, right-padded with PAD.
         Returns (B, d_model): the Mamba output at each sequence's last real token."""
         deal = torch.cat([F.one_hot(my_card, N_RANKS), F.one_hot(opp_card, N_RANKS),
                           F.one_hot(seat, 2)], dim=-1).float()
-        first = self.deal_proj(deal) + self.type_emb(opp_type)
+        first = self.deal_proj(deal)
         tokens = torch.cat([first.unsqueeze(1), self.event_emb(events)], dim=1)
         for block in self.blocks:
             tokens = block(tokens)
@@ -99,11 +97,10 @@ class WorldModel(nn.Module):
         return tokens[torch.arange(tokens.shape[0]), lengths]
 
     def represent_hypotheses(self, seat, my_card, events):
-        """One latent per hypothesis (H = 3 * n_types) for the same real history."""
-        H = N_RANKS * self.n_types
+        """One latent per possible opponent card (3) for the same real history."""
+        H = N_RANKS
         return self.represent(
-            torch.full((H,), seat), torch.full((H,), my_card),
-            hypothesis_cards(self.n_types), hypothesis_types(self.n_types),
+            torch.full((H,), seat), torch.full((H,), my_card), torch.arange(H),
             torch.tensor([list(events)] * H, dtype=torch.long).reshape(H, len(events)),
             torch.full((H,), len(events)))
 
