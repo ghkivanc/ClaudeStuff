@@ -1,6 +1,6 @@
 import torch
 
-from mamba_alns.mamba import MambaBlock, ResidualMamba
+from plan_rl.mamba import MambaBlock, ResidualMamba
 
 
 def test_output_shape():
