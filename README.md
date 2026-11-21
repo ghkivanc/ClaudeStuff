@@ -163,6 +163,17 @@ python -m plan_rl.train
 
 To re-evaluate a saved model: `python -m plan_rl.evaluate`.
 
+### Play against it yourself
+
+```bash
+python -m plan_rl.play            # against the trained bot (loads world_model.pt)
+python -m plan_rl.play --cfr      # against the CFR strategy instead
+```
+
+You and the bot swap seats every hand. Type `f`, `c` or `r` to fold,
+check/call or bet/raise, and `q` to stop. After each hand it shows the bot's
+card and your running score.
+
 Rough CPU runtimes (estimated, not measured): about 0.5–1 s per self-play
 hand, because both players plan. So the default 5000 hands take **~1–1.5 h**.
 CFR takes a few minutes and evaluation ~15–30 min. For a quick trial:
@@ -206,6 +217,7 @@ plan_rl/
   agent.py      planning agent: belief, commit until surprised, replanning
   train.py      Config, records, loss, self-play loop
   evaluate.py   matches against random and CFR
+  play.py       play against the bot in the terminal
   tests/
 ```
 
