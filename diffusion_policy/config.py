@@ -31,8 +31,7 @@ class Config:
     embed_dim: int = 64
     encoder_layers: int = 2
     encoder_heads: int = 4
-    denoiser_hidden: int = 512
-    denoiser_depth: int = 3
+    unet_channels: int = 32  # U-Net base channels; must be a multiple of 8
 
     # Optimisation
     lr: float = 3e-4

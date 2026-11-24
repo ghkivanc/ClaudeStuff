@@ -6,7 +6,7 @@ from .encoder import HistoryEncoder
 
 
 class WeightNormalizer(nn.Module):
-    """Per-coordinate standardisation of canonical weights, fitted on the bootstrap set."""
+    """Per-coordinate standardisation of policy weights, fitted on the bootstrap set."""
 
     def __init__(self, num_params):
         super().__init__()
@@ -36,7 +36,7 @@ class SamplerModel(nn.Module):
         self.encoder = HistoryEncoder(
             tuple_dim, cfg.K, cfg.embed_dim, cfg.encoder_layers, cfg.encoder_heads
         )
-        self.denoiser = Denoiser(num_params, cfg.embed_dim, cfg.denoiser_hidden, cfg.denoiser_depth)
+        self.denoiser = Denoiser(num_params, cfg.embed_dim, cfg.unet_channels)
         self.value_head = nn.Sequential(
             nn.Linear(cfg.embed_dim, 128), nn.SiLU(), nn.Linear(128, 1)
         )

@@ -6,7 +6,7 @@ One iteration:
   3. run theta_i for one segment (L steps, or fewer if the episode ends);
   4. R_i = discounted segment reward + gamma^len * V(history at segment end);
   5. A_i = R_i - V(H_i); beta from the KL target; w = softmax(A / beta);
-  6. G gradient steps: weighted denoising loss on canonical z_i, plus value loss.
+  6. G gradient steps: weighted denoising loss on the sampled z_i, plus value loss.
 
 Run: python -m diffusion_policy.train [--iterations 200 --device cuda ...]
 """
@@ -17,7 +17,6 @@ from dataclasses import asdict, fields
 import torch
 
 from .beta import improvement_weights, kl_to_uniform
-from .canonicalize import canonicalize
 from .config import Config
 from .diffusion import Diffusion
 from .history import History, tuple_dim
@@ -47,12 +46,11 @@ class Trainer:
         self.optimizer.step()
 
     def bootstrap(self):
-        """Fit the normaliser and pretrain the denoiser on canonical random initialisations."""
+        """Fit the normaliser and pretrain the denoiser on random initialisations."""
         cfg = self.cfg
         theta = random_init(self.spec, cfg.bootstrap_size, self.device)
-        canonical = canonicalize(self.spec, theta)
-        self.model.normalizer.fit(canonical)
-        z = self.model.normalizer.normalize(canonical)
+        self.model.normalizer.fit(theta)
+        z = self.model.normalizer.normalize(theta)
 
         for step in range(1, cfg.bootstrap_steps + 1):
             idx = torch.randint(len(z), (cfg.minibatch,), device=self.device)
@@ -64,17 +62,18 @@ class Trainer:
 
     @torch.no_grad()
     def sample_policies(self, h):
+        """Returns the sampled standardised weights z and the policy weights theta."""
         z = self.diffusion.sample(
             self.model.denoiser, h, self.spec.num_params, self.cfg.sampling_steps, self.cfg.clip_x0
         )
-        return self.model.normalizer.unnormalize(z)
+        return z, self.model.normalizer.unnormalize(z)
 
     @torch.no_grad()
     def collect(self):
         """Run one segment in every environment. Returns the batch and some stats."""
         cfg = self.cfg
         H, H_mask = self.history.snapshot()  # taken before theta acts: no leakage
-        theta = self.sample_policies(self.model.encoder(H, H_mask))
+        z, theta = self.sample_policies(self.model.encoder(H, H_mask))
 
         segment_length = min(cfg.segment_length, cfg.max_steps - self.env.t)
         segment_return = torch.zeros(cfg.num_envs, device=self.device)
@@ -99,7 +98,7 @@ class Trainer:
         batch = {
             "H": H,
             "H_mask": H_mask,
-            "z": self.model.normalizer.normalize(canonicalize(self.spec, theta)),
+            "z": z,  # stored exactly as sampled
             "returns": returns,
         }
         stats = {"reward_per_step": (raw_reward / segment_length).mean().item()}

@@ -10,7 +10,7 @@ from diffusion_policy.diffusion import Diffusion
 def test_loss_reduces_to_standard_ddpm():
     torch.manual_seed(0)
     diffusion = Diffusion(T=100)
-    denoiser = Denoiser(data_dim=5, cond_dim=4, hidden=32, depth=2)
+    denoiser = Denoiser(data_dim=5, cond_dim=4, base_channels=8)
     z0 = torch.randn(10, 5)
     h = torch.randn(10, 4)
     t = torch.randint(1, 101, (10,))
@@ -42,7 +42,7 @@ def test_diffusion_reproduces_gaussian_mixture_modes():
     torch.manual_seed(0)
     modes = torch.tensor([[1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, -1.0]])
     diffusion = Diffusion(T=100)
-    denoiser = Denoiser(data_dim=2, cond_dim=4, hidden=128, depth=3)
+    denoiser = Denoiser(data_dim=2, cond_dim=4, base_channels=32)
     optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-3)
     # Decay the learning rate to zero: at a constant rate the final weights jitter,
     # and DDIM turns that jitter into a shift of probability mass between modes.

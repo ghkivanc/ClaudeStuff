@@ -5,7 +5,7 @@ import torch
 
 from diffusion_policy.beta import improvement_weights
 from diffusion_policy.config import Config
-from diffusion_policy.denoiser import Denoiser
+from diffusion_policy.denoiser import Denoiser, ResBlock
 from diffusion_policy.diffusion import Diffusion
 from diffusion_policy.train import Trainer
 
@@ -23,8 +23,7 @@ def tiny_config(**overrides):
         embed_dim=16,
         encoder_layers=1,
         encoder_heads=2,
-        denoiser_hidden=32,
-        denoiser_depth=1,
+        unet_channels=8,
         minibatch=4,
         grad_steps=2,
         bootstrap_size=64,
@@ -60,6 +59,25 @@ def test_segment_stops_at_episode_end_and_history_resets():
     assert not trainer.history.mask.any()
 
 
+def test_bootstrap_leaves_h_weights_at_zero():
+    """The bootstrap only sees the zero null embedding, so FiLM's h-columns get no gradient."""
+    trainer = Trainer(tiny_config(bootstrap_steps=20))
+    trainer.bootstrap()
+    time_dim = trainer.model.denoiser.time_dim
+    blocks = [m for m in trainer.model.denoiser.modules() if isinstance(m, ResBlock)]
+    assert blocks
+    for block in blocks:
+        assert (block.film.weight[:, time_dim:] == 0).all()
+        assert (block.film.weight[:, :time_dim] != 0).any()  # the time columns did train
+
+
+def test_stored_z_is_the_sampled_z():
+    trainer = Trainer(tiny_config())
+    batch, _ = trainer.collect()
+    theta = trainer.model.normalizer.unnormalize(batch["z"])
+    torch.testing.assert_close(trainer.model.normalizer.normalize(theta), batch["z"])
+
+
 def test_one_training_iteration_runs():
     trainer = Trainer(tiny_config())
     trainer.bootstrap()
@@ -77,7 +95,7 @@ def test_environment_free_improvement():
     torch.manual_seed(0)
     target = torch.tensor([1.5, -1.0, 0.5, 1.0])
     diffusion = Diffusion(T=100)
-    denoiser = Denoiser(data_dim=4, cond_dim=8, hidden=128, depth=2)
+    denoiser = Denoiser(data_dim=4, cond_dim=8, base_channels=32)
     optimizer = torch.optim.Adam(denoiser.parameters(), lr=1e-3)
     h = torch.zeros(1, 8)
 
