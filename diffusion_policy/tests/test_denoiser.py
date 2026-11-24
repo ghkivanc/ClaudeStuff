@@ -1,6 +1,7 @@
 import torch
+from torch import nn
 
-from diffusion_policy.denoiser import Denoiser, image_side
+from diffusion_policy.denoiser import Denoiser, SelfAttention, image_side
 
 
 def test_image_side():
@@ -24,3 +25,13 @@ def test_h_has_no_effect_at_initialisation():
     denoiser = Denoiser(50, cond_dim=4, base_channels=8)
     z, t = torch.randn(3, 50), torch.rand(3)
     torch.testing.assert_close(denoiser(z, t, torch.randn(3, 4)), denoiser(z, t, torch.randn(3, 4)))
+
+
+def test_attention_connects_opposite_corners():
+    torch.manual_seed(0)
+    attention = SelfAttention(32)
+    attention.norm = nn.Identity()  # GroupNorm also couples all cells; test attention alone
+    x = torch.randn(1, 32, 9, 9)
+    changed = x.clone()
+    changed[0, :, 0, 0] += 1.0
+    assert not torch.allclose(attention(changed)[0, :, 8, 8], attention(x)[0, :, 8, 8])

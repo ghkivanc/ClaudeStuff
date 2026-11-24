@@ -4,7 +4,8 @@ The flat weight vector (every layer's W and b, vectorised and concatenated) is
 zero-padded and reshaped row by row into a square image. The layout is
 arbitrary: weights that end up next to each other need not be related. The
 output is cropped back to a flat vector, so callers never see the image.
-(t, h) enter every residual block through FiLM.
+(t, h) enter every residual block through FiLM. Self-attention at the
+coarsest level lets every part of the image reach every other part.
 """
 
 import math
@@ -59,6 +60,21 @@ class ResBlock(nn.Module):
         return self.skip(x) + y
 
 
+class SelfAttention(nn.Module):
+    """Every cell attends to every other cell, so weights far apart in the image can interact."""
+
+    def __init__(self, channels, num_heads=4):
+        super().__init__()
+        self.norm = nn.GroupNorm(8, channels)
+        self.attention = nn.MultiheadAttention(channels, num_heads, batch_first=True)
+
+    def forward(self, x):
+        n, channels, height, width = x.shape
+        tokens = self.norm(x).flatten(2).transpose(1, 2)  # (n, height * width, channels)
+        out, _ = self.attention(tokens, tokens, tokens, need_weights=False)
+        return x + out.transpose(1, 2).reshape(n, channels, height, width)
+
+
 class Denoiser(nn.Module):
     """U-Net with two resolution halvings. base_channels must be a multiple of 8 (GroupNorm)."""
 
@@ -79,6 +95,7 @@ class Denoiser(nn.Module):
         self.down2 = ResBlock(c1, c2, cond)  # 1/2 size
         self.halve2 = nn.Conv2d(c2, c2, 3, stride=2, padding=1)
         self.middle = ResBlock(c2, c3, cond)  # 1/4 size
+        self.attention = SelfAttention(c3)  # 1/4 size: 81 cells for the default policy
         self.double2 = nn.Conv2d(c3, c3, 3, padding=1)  # applied after nearest upsampling
         self.up2 = ResBlock(c3 + c2, c2, cond)  # 1/2 size
         self.double1 = nn.Conv2d(c2, c2, 3, padding=1)
@@ -94,7 +111,7 @@ class Denoiser(nn.Module):
         x = self.input(x)
         skip1 = self.down1(x, cond)
         skip2 = self.down2(self.halve1(skip1), cond)
-        x = self.middle(self.halve2(skip2), cond)
+        x = self.attention(self.middle(self.halve2(skip2), cond))
         x = self.double2(F.interpolate(x, scale_factor=2, mode="nearest"))
         x = self.up2(torch.cat([x, skip2], dim=1), cond)
         x = self.double1(F.interpolate(x, scale_factor=2, mode="nearest"))

@@ -78,6 +78,9 @@ for the default policy), standardised per coordinate, zero-padded and reshaped
 into a 36 × 36 image. The layout is arbitrary. A U-Net then predicts the noise:
 - it has two halvings (36 → 18 → 9) with skip connections;
 - each resolution has a residual block with FiLM on (t, h);
+- self-attention at the 9 × 9 level lets every part of the image reach every
+  other part, because related weights can land far apart in the arbitrary
+  layout;
 - the output is cropped back to the flat vector.
 
 Padded cells are only ever zeros on the input side, and the loss only sees the
