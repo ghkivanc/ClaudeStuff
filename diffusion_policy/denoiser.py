@@ -5,7 +5,8 @@ zero-padded and reshaped row by row into a square image. The layout is
 arbitrary: weights that end up next to each other need not be related. The
 output is cropped back to a flat vector, so callers never see the image.
 (t, h) enter every residual block through FiLM. Self-attention at the
-coarsest level lets every part of the image reach every other part.
+coarsest level lets every part of the image reach every other part, and two
+fixed coordinate channels (CoordConv) tell the network where each cell is.
 """
 
 import math
@@ -89,7 +90,13 @@ class Denoiser(nn.Module):
             nn.Linear(time_dim, time_dim), nn.SiLU(), nn.Linear(time_dim, time_dim)
         )
 
-        self.input = nn.Conv2d(1, c1, 3, padding=1)
+        # CoordConv: two fixed channels holding each cell's row and column in [-1, 1],
+        # so the network can tell which weight each cell holds.
+        coords = torch.linspace(-1, 1, self.side)
+        rows, cols = torch.meshgrid(coords, coords, indexing="ij")
+        self.register_buffer("coords", torch.stack([rows, cols]).unsqueeze(0))
+
+        self.input = nn.Conv2d(1 + 2, c1, 3, padding=1)  # weight image + coordinates
         self.down1 = ResBlock(c1, c1, cond)  # full size
         self.halve1 = nn.Conv2d(c1, c1, 3, stride=2, padding=1)
         self.down2 = ResBlock(c1, c2, cond)  # 1/2 size
@@ -107,6 +114,7 @@ class Denoiser(nn.Module):
         n = z_t.shape[0]
         cond = torch.cat([self.time_mlp(timestep_embedding(t, self.time_dim)), h], dim=-1)
         x = F.pad(z_t, (0, self.side**2 - self.data_dim)).view(n, 1, self.side, self.side)
+        x = torch.cat([x, self.coords.expand(n, -1, -1, -1)], dim=1)
 
         x = self.input(x)
         skip1 = self.down1(x, cond)

@@ -75,7 +75,10 @@ cleared. The first segment of an episode is conditioned on the null embedding.
 
 Every layer's W and b are vectorised and concatenated into θ (1,250 numbers
 for the default policy), standardised per coordinate, zero-padded and reshaped
-into a 36 × 36 image. The layout is arbitrary. A U-Net then predicts the noise:
+into a 36 × 36 image. The layout is arbitrary. Two fixed coordinate channels
+(CoordConv: each cell's row and column in [−1, 1]) are added to the image, so
+the network knows which weight each cell holds. A U-Net then predicts the
+noise:
 - it has two halvings (36 → 18 → 9) with skip connections;
 - each resolution has a residual block with FiLM on (t, h);
 - self-attention at the 9 × 9 level lets every part of the image reach every

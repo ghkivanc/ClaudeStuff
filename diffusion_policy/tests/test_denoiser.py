@@ -27,6 +27,15 @@ def test_h_has_no_effect_at_initialisation():
     torch.testing.assert_close(denoiser(z, t, torch.randn(3, 4)), denoiser(z, t, torch.randn(3, 4)))
 
 
+def test_coordinate_channels_identify_every_cell():
+    denoiser = Denoiser(1250, cond_dim=4, base_channels=8)
+    coords = denoiser.coords
+    assert coords.shape == (1, 2, 36, 36)
+    assert coords.min() == -1 and coords.max() == 1
+    pairs = coords[0].flatten(1).T  # (36 * 36, 2): one (row, column) pair per cell
+    assert len(torch.unique(pairs, dim=0)) == 36 * 36
+
+
 def test_attention_connects_opposite_corners():
     torch.manual_seed(0)
     attention = SelfAttention(32)
